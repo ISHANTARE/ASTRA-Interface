@@ -1,0 +1,10 @@
+flask>=3.0.0
+flask-cors>=4.0.0
+cryptography>=42.0.0
+werkzeug>=3.0.0
+gunicorn>=21.0.0
+whitenoise>=6.6.0
+
+# Core physics engine
+astra-core-engine>=3.3.0
+

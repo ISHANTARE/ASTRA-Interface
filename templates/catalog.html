@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}Satellite Catalog{% endblock %}
+{% block breadcrumb %}Catalog Browser{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Satellite Catalog Browser</h1>
+    <p class="page-sub">Fetch live orbital data from Space-Track.org — the authoritative 18th Space Defense Squadron catalog. Supports OMM (recommended) and legacy TLE formats.</p>
+  </div>
+</div>
+
+<div class="control-card">
+  <div class="control-grid">
+    <div class="form-group">
+      <label for="catalogGroup">Satellite Group</label>
+      <select id="catalogGroup">
+        <option value="starlink">🛰 Starlink Constellation</option>
+        <option value="gps-ops">📍 GPS Constellation</option>
+        <option value="iridium-33-debris">☄️ Iridium-33 Debris</option>
+        <option value="cosmos-2251-debris">🌌 Cosmos-2251 Debris</option>
+        <option value="active">🌐 All Active Satellites</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="catalogFormat">Data Format</label>
+      <select id="catalogFormat">
+        <option value="json">OMM (recommended)</option>
+        <option value="tle">TLE (legacy)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="catalogLimit">Display Limit</label>
+      <input type="number" id="catalogLimit" value="200" min="10" max="500"/>
+    </div>
+    <div class="form-group form-group--action">
+      <button class="btn-primary" id="btnFetchCatalog">
+        <span class="btn-spinner hidden" id="catalogSpinner"></span>
+        ↓ Fetch Catalog
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Regime Filter Pills -->
+<div id="regimeFilters" class="regime-pills hidden">
+  <span class="regime-pill-label">Filter by regime:</span>
+  <button class="regime-pill active" data-regime="ALL">All</button>
+  <button class="regime-pill" data-regime="LEO" style="--pill-color:var(--teal)">LEO</button>
+  <button class="regime-pill" data-regime="MEO" style="--pill-color:var(--amber)">MEO</button>
+  <button class="regime-pill" data-regime="GEO" style="--pill-color:var(--cyan)">GEO</button>
+  <button class="regime-pill" data-regime="HEO" style="--pill-color:var(--red)">HEO</button>
+</div>
+
+<div id="catalogMeta" class="result-meta hidden"></div>
+<div id="catalogLoader" class="loader-container hidden">
+  <div class="orbit-loader"></div>
+  <p>Authenticating with Space-Track.org and fetching catalog data…</p>
+</div>
+<div id="catalogError" class="error-card hidden"></div>
+
+<div class="table-wrapper">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>NORAD ID</th>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Regime</th>
+        <th>Epoch (UTC)</th>
+        <th>Inclination (°)</th>
+        <th>Eccentricity</th>
+        <th>Alt (km)</th>
+        <th>Rev/Day</th>
+        <th>RCS (m²)</th>
+        <th>Mass (kg)</th>
+      </tr>
+    </thead>
+    <tbody id="catalogTbody">
+      <tr class="empty-row"><td colspan="11">Select a satellite group and click Fetch Catalog.</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const btnFetch   = document.getElementById('btnFetchCatalog');
+const spinner    = document.getElementById('catalogSpinner');
+const loader     = document.getElementById('catalogLoader');
+const errorEl    = document.getElementById('catalogError');
+const metaEl     = document.getElementById('catalogMeta');
+const tbody      = document.getElementById('catalogTbody');
+const filtersEl  = document.getElementById('regimeFilters');
+
+let allRecords   = [];
+let activeRegime = 'ALL';
+
+btnFetch.addEventListener('click', async () => {
+  const group  = document.getElementById('catalogGroup').value;
+  const format = document.getElementById('catalogFormat').value;
+  const limit  = parseInt(document.getElementById('catalogLimit').value) || 200;
+
+  hide(errorEl); hide(metaEl); hide(filtersEl);
+  show(loader); btnFetch.disabled = true; spinner.classList.remove('hidden');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="11">Loading…</td></tr>';
+
+  try {
+    const res  = await fetch('/api/fetch', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group, format, limit }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError(errorEl, data.error || 'Server error'); return; }
+
+    allRecords   = data.records;
+    activeRegime = 'ALL';
+    document.querySelectorAll('.regime-pill').forEach(p => p.classList.toggle('active', p.dataset.regime === 'ALL'));
+
+    // Meta chips
+    metaEl.innerHTML = chip('Group', data.group) + ' · ' + chip('Total', data.total_fetched.toLocaleString()) +
+      ' · ' + chip('Shown', data.returned.toLocaleString()) + ' · ' + chip('Source', 'Space-Track.org');
+    show(metaEl);
+
+    if (format === 'json') {
+      show(filtersEl);
+      const rc = data.regime_counts || {};
+      document.querySelectorAll('.regime-pill[data-regime]').forEach(p => {
+        const r = p.dataset.regime;
+        if (r !== 'ALL') p.textContent = `${r} (${(rc[r]||0).toLocaleString()})`;
+      });
+    }
+
+    renderTable(allRecords);
+    showToast(`Fetched ${data.total_fetched.toLocaleString()} satellites.`, 'success');
+  } catch(e) { showError(errorEl, 'Network error: ' + e.message); }
+  finally { hide(loader); btnFetch.disabled = false; spinner.classList.add('hidden'); }
+});
+
+// Regime filter
+document.querySelectorAll('.regime-pill').forEach(p => {
+  p.addEventListener('click', () => {
+    activeRegime = p.dataset.regime;
+    document.querySelectorAll('.regime-pill').forEach(pp => pp.classList.remove('active'));
+    p.classList.add('active');
+    renderTable(activeRegime === 'ALL' ? allRecords : allRecords.filter(r => r.regime === activeRegime));
+  });
+});
+
+function renderTable(records) {
+  if (!records.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">No records for this filter.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = records.map(r => `
+    <tr>
+      <td class="cell-id">${r.norad_id}</td>
+      <td class="cell-name">${r.name}</td>
+      <td>${r.object_type || '—'}</td>
+      <td>${regimeBadge(r.regime)}</td>
+      <td>${fmtDate(r.epoch)}</td>
+      <td>${r.inclination_deg !== null ? fmtNum(r.inclination_deg,2) : '—'}</td>
+      <td>${r.eccentricity !== null ? fmtNum(r.eccentricity,6) : '—'}</td>
+      <td>${r.altitude_km !== null ? fmtNum(r.altitude_km,0) : '—'}</td>
+      <td>${r.mean_motion_rev_day !== null ? fmtNum(r.mean_motion_rev_day,3) : '—'}</td>
+      <td>${r.rcs_m2 !== null ? fmtNum(r.rcs_m2,3) : '—'}</td>
+      <td>${r.mass_kg !== null ? fmtNum(r.mass_kg,1) : '—'}</td>
+    </tr>`).join('');
+}
+
+function regimeBadge(r) {
+  const colors = { LEO:'var(--teal)', MEO:'var(--amber)', GEO:'var(--cyan)', HEO:'var(--red)' };
+  const c = colors[r] || 'var(--text-muted)';
+  return `<span style="color:${c};font-weight:600;font-size:.72rem">${r || '—'}</span>`;
+}
+</script>
+{% endblock %}

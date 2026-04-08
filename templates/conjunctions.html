@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Conjunction Screener{% endblock %}
+{% block breadcrumb %}Conjunction Screener{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Conjunction Screener</h1>
+    <p class="page-sub">Propagates satellite trajectories using SGP4, builds a KD-tree spatial index over the full window, then applies cubic-spline interpolation for precise TCA and Pc computation.</p>
+  </div>
+</div>
+
+<div class="control-card">
+  <div class="control-grid">
+    <div class="form-group">
+      <label for="conjGroup">Satellite Group</label>
+      <select id="conjGroup">
+        <option value="starlink">🛰 Starlink</option>
+        <option value="iridium-33-debris">☄️ Iridium-33 Debris</option>
+        <option value="cosmos-2251-debris">🌌 Cosmos-2251 Debris</option>
+        <option value="gps-ops">📍 GPS Constellation</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="conjLimit">Objects to Screen</label>
+      <input type="number" id="conjLimit" value="60" min="10" max="200"/>
+    </div>
+    <div class="form-group">
+      <label for="conjThreshold">Threshold Distance (km)</label>
+      <input type="number" id="conjThreshold" value="10" min="1" max="100" step="0.5"/>
+    </div>
+    <div class="form-group">
+      <label for="conjDuration">Propagation Window (min)</label>
+      <input type="number" id="conjDuration" value="120" min="30" max="1440" step="30"/>
+    </div>
+    <div class="form-group form-group--action">
+      <button class="btn-primary btn-warning" id="btnRunConj">
+        <span class="btn-spinner hidden" id="conjSpinner"></span>
+        ⚡ Screen Conjunctions
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Risk Summary Bar -->
+<div id="riskSummary" class="risk-summary hidden">
+  <div class="rs-label">Risk Distribution:</div>
+  <div class="rs-chips" id="rsChips"></div>
+</div>
+
+<div id="conjMeta"   class="result-meta hidden"></div>
+<div id="conjLoader" class="loader-container hidden">
+  <div class="orbit-loader"></div>
+  <p>Fetching catalog → propagating orbits → running KD-tree screening…</p>
+</div>
+<div id="conjError"  class="error-card hidden"></div>
+
+<div class="table-wrapper">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Object A</th>
+        <th>Object B</th>
+        <th>TCA (UTC)</th>
+        <th>Miss Distance (km)</th>
+        <th>Rel. Velocity (km/s)</th>
+        <th>Collision P<sub>c</sub></th>
+        <th>Risk Level</th>
+        <th>Cov. Source</th>
+      </tr>
+    </thead>
+    <tbody id="conjTbody">
+      <tr class="empty-row"><td colspan="8">Configure parameters and run conjunction screening.</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const btnConj  = document.getElementById('btnRunConj');
+const spinner  = document.getElementById('conjSpinner');
+const loader   = document.getElementById('conjLoader');
+const errorEl  = document.getElementById('conjError');
+const metaEl   = document.getElementById('conjMeta');
+const tbody    = document.getElementById('conjTbody');
+const riskDiv  = document.getElementById('riskSummary');
+const rsChips  = document.getElementById('rsChips');
+
+btnConj.addEventListener('click', async () => {
+  const group        = document.getElementById('conjGroup').value;
+  const limit        = parseInt(document.getElementById('conjLimit').value) || 60;
+  const threshold_km = parseFloat(document.getElementById('conjThreshold').value) || 10;
+  const duration_min = parseFloat(document.getElementById('conjDuration').value) || 120;
+
+  hide(errorEl); hide(metaEl); hide(riskDiv);
+  show(loader); btnConj.disabled = true; spinner.classList.remove('hidden');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="8">Processing…</td></tr>';
+
+  try {
+    const res  = await fetch('/api/conjunctions', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ group, limit, threshold_km, duration_min }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError(errorEl, data.error || 'Server error'); return; }
+
+    // Risk summary
+    const rs = data.risk_summary || {};
+    const riskOrder = ['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN'];
+    rsChips.innerHTML = riskOrder.map(r => {
+      if (!rs[r]) return '';
+      return `<span class="risk-chip risk-${r.toLowerCase()}">${rs[r]} ${r}</span>`;
+    }).join('');
+    show(riskDiv);
+
+    metaEl.innerHTML = chip('Group', data.group) + ' · ' + chip('Screened', data.satellites_screened) +
+      ' · ' + chip('Window', `${data.duration_min} min`) +
+      ' · ' + chip('Threshold', `${data.threshold_km} km`) +
+      ' · ' + chip('Events', data.events_found);
+    show(metaEl);
+
+    if (!data.events.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No conjunction events found within threshold &amp; window.</td></tr>';
+      showToast('No conjunctions found. Try increasing threshold or duration.', 'info');
+      return;
+    }
+
+    tbody.innerHTML = data.events.map(ev => `
+      <tr>
+        <td class="cell-id">${ev.object_a}</td>
+        <td class="cell-id">${ev.object_b}</td>
+        <td>${fmtDate(ev.tca)}</td>
+        <td>${fmtNum(ev.miss_distance_km, 3)}</td>
+        <td>${fmtNum(ev.relative_velocity_km_s, 3)}</td>
+        <td>${ev.collision_probability !== null ? fmtSci(ev.collision_probability) : '—'}</td>
+        <td>${riskChip(ev.risk_level)}</td>
+        <td style="color:var(--text-muted)">${ev.covariance_source}</td>
+      </tr>`).join('');
+
+    showToast(`Found ${data.events_found} conjunction event${data.events_found!==1?'s':''}.`,
+      data.events_found > 0 ? 'warning' : 'success');
+  } catch(e) { showError(errorEl, 'Network error: ' + e.message); }
+  finally { hide(loader); btnConj.disabled = false; spinner.classList.add('hidden'); }
+});
+</script>
+{% endblock %}

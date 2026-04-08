@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block breadcrumb %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+
+  <!-- ── Welcome ───────────────────────────────────────────────── -->
+  <div class="db-welcome">
+    <div>
+      <h1 class="db-title">Welcome back, <span class="accent">{{ current_user.username }}</span> 👋</h1>
+      <p class="db-sub">Space situational awareness, live from the 18th Space Defense Squadron catalog.</p>
+    </div>
+    {% if not has_st_creds %}
+    <button class="btn-primary btn-warning" onclick="openCredsModal()">
+      🔑 Connect Space-Track.org
+    </button>
+    {% endif %}
+  </div>
+
+  <!-- ── Stats Cards ────────────────────────────────────────────── -->
+  <div class="stats-grid" id="statsGrid">
+    <div class="stat-card" id="statTracked">
+      <div class="stat-icon" style="background:rgba(0,212,255,0.12);color:var(--cyan)">🛰️</div>
+      <div class="stat-body">
+        <div class="stat-value" id="svTracked">—</div>
+        <div class="stat-label">Tracked Objects</div>
+      </div>
+      <div class="stat-regime-bar" id="regimeBar"></div>
+    </div>
+    <div class="stat-card" id="statLEO">
+      <div class="stat-icon" style="background:rgba(0,255,204,0.1);color:var(--teal)">🌍</div>
+      <div class="stat-body">
+        <div class="stat-value" id="svLEO">—</div>
+        <div class="stat-label">LEO Objects</div>
+      </div>
+      <div class="stat-trend" style="color:var(--teal)">Low Earth Orbit &lt;2,000 km</div>
+    </div>
+    <div class="stat-card" id="statGEO">
+      <div class="stat-icon" style="background:rgba(255,179,71,0.1);color:var(--amber)">⭕</div>
+      <div class="stat-body">
+        <div class="stat-value" id="svGEO">—</div>
+        <div class="stat-label">GEO Belt Objects</div>
+      </div>
+      <div class="stat-trend" style="color:var(--amber)">Geostationary Ring ≈35,786 km</div>
+    </div>
+    <div class="stat-card" id="statFresh">
+      <div class="stat-icon" style="background:rgba(6,214,160,0.1);color:var(--green)">📡</div>
+      <div class="stat-body">
+        <div class="stat-value stat-value--sm" id="svFresh">—</div>
+        <div class="stat-label">Latest Epoch (UTC)</div>
+      </div>
+      <div class="stat-trend" id="svFreshStatus" style="color:var(--green)">Checking…</div>
+    </div>
+  </div>
+
+  <!-- ── Quick Actions & Activity ───────────────────────────────── -->
+  <div class="db-lower">
+
+    <!-- Quick Action Tiles -->
+    <div class="db-section">
+      <h2 class="db-section-title">Mission Modules</h2>
+      <div class="action-tiles">
+        <a href="/catalog" class="action-tile">
+          <div class="tile-icon" style="background:linear-gradient(135deg,#00d4ff,#0077ff)">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="white" stroke-width="1.5"/><path d="M3 12h18M12 3c-3 4-3 14 0 18M12 3c3 4 3 14 0 18" stroke="white" stroke-width="1.2"/></svg>
+          </div>
+          <div class="tile-text">
+            <div class="tile-name">Catalog Browser</div>
+            <div class="tile-desc">Fetch &amp; explore the Space-Track orbital catalog</div>
+          </div>
+          <div class="tile-arrow">→</div>
+        </a>
+        <a href="/conjunctions" class="action-tile">
+          <div class="tile-icon" style="background:linear-gradient(135deg,#ffb347,#ff7c45)">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="8" cy="12" r="6" stroke="white" stroke-width="1.5"/><circle cx="16" cy="12" r="6" stroke="white" stroke-width="1.5"/></svg>
+          </div>
+          <div class="tile-text">
+            <div class="tile-name">Conjunction Screener</div>
+            <div class="tile-desc">SGP4 propagation + KD-tree close-approach detection</div>
+          </div>
+          <div class="tile-arrow">→</div>
+        </a>
+        <a href="/passes" class="action-tile">
+          <div class="tile-icon" style="background:linear-gradient(135deg,#06d6a0,#00ffcc)">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M6 18 L18 6" stroke="white" stroke-width="1.5" stroke-linecap="round"/><circle cx="6" cy="18" r="3" stroke="white" stroke-width="1.5"/><circle cx="18" cy="6" r="3" stroke="white" stroke-width="1.5"/><circle cx="12" cy="12" r="2" fill="white"/></svg>
+          </div>
+          <div class="tile-text">
+            <div class="tile-name">Pass Predictor</div>
+            <div class="tile-desc">TEME→ENU visibility with sub-second AOS/LOS</div>
+          </div>
+          <div class="tile-arrow">→</div>
+        </a>
+      </div>
+    </div>
+
+    <!-- Activity Log -->
+    <div class="db-section db-section--activity">
+      <h2 class="db-section-title">Recent Activity</h2>
+      <div class="activity-list" id="activityList">
+        {% if activity %}
+          {% for a in activity %}
+          <div class="activity-row">
+            <span class="activity-badge activity-badge--{{ a.action.lower().replace('_','-') }}">{{ a.action }}</span>
+            <span class="activity-detail">{{ a.detail }}</span>
+            <span class="activity-time">{{ a.created_at }}</span>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="activity-empty">No activity yet — start by fetching catalog data.</div>
+        {% endif %}
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── NORAD Quick Lookup ─────────────────────────────────────── -->
+  <div class="db-section" style="margin-top:0">
+    <h2 class="db-section-title">Quick Satellite Lookup</h2>
+    <div class="quick-lookup">
+      <input id="qlNorad" type="text" placeholder="Enter NORAD ID (e.g. 25544 for ISS)" class="ql-input"/>
+      <button class="btn-primary" id="qlBtn" onclick="quickLookup()">
+        <span class="ql-spinner hidden" id="qlSpinner"></span>
+        Lookup
+      </button>
+    </div>
+    <div id="qlResult" class="ql-result hidden"></div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  loadDashboardStats();
+  updateClock();
+  setInterval(updateClock, 1000);
+});
+
+async function loadDashboardStats() {
+  const cards = ['svTracked','svLEO','svGEO','svFresh'];
+  cards.forEach(id => { document.getElementById(id).textContent = '—'; });
+
+  try {
+    const res = await fetch('/api/dashboard-stats');
+    if (!res.ok) { return; }
+    const d = await res.json();
+    animateCount('svTracked', d.tracked_objects);
+    animateCount('svLEO',     d.leo_objects);
+    animateCount('svGEO',     d.geo_objects);
+    document.getElementById('svFresh').textContent = (d.latest_epoch || '—').replace('T',' ').replace('Z','');
+    document.getElementById('svFreshStatus').textContent = d.data_fresh ? '✓ Data is current' : 'Stale';
+
+    // Regime bar
+    const total = d.tracked_objects || 1;
+    const bar = document.getElementById('regimeBar');
+    bar.innerHTML = `
+      <div class="rb-wrap" title="Orbit regime distribution">
+        <div class="rb-seg" style="width:${d.leo_objects/total*100}%;background:var(--teal)" title="LEO"></div>
+        <div class="rb-seg" style="width:${d.meo_objects/total*100}%;background:var(--amber)" title="MEO"></div>
+        <div class="rb-seg" style="width:${d.geo_objects/total*100}%;background:var(--cyan)" title="GEO"></div>
+        <div class="rb-seg" style="width:${d.heo_objects/total*100}%;background:var(--red)" title="HEO"></div>
+      </div>
+      <div class="rb-legend">
+        <span style="color:var(--teal)">■ LEO</span> <span style="color:var(--amber)">■ MEO</span>
+        <span style="color:var(--cyan)">■ GEO</span> <span style="color:var(--red)">■ HEO</span>
+      </div>`;
+  } catch(e) { console.warn('Stats error:', e); }
+}
+
+function animateCount(id, target) {
+  const el = document.getElementById(id);
+  if (!target) { el.textContent = '—'; return; }
+  let cur = 0;
+  const step = Math.ceil(target / 60);
+  const t = setInterval(() => {
+    cur = Math.min(cur + step, target);
+    el.textContent = cur.toLocaleString();
+    if (cur >= target) clearInterval(t);
+  }, 20);
+}
+
+function updateClock() {
+  const el = document.getElementById('topbarTime');
+  if (el) el.textContent = new Date().toUTCString().replace('GMT','UTC');
+}
+
+async function quickLookup() {
+  const norad = document.getElementById('qlNorad').value.trim();
+  if (!norad) return;
+  const btn  = document.getElementById('qlBtn');
+  const spin = document.getElementById('qlSpinner');
+  const res_el = document.getElementById('qlResult');
+  btn.disabled = true; spin.classList.remove('hidden');
+  res_el.classList.add('hidden');
+
+  try {
+    const res  = await fetch('/api/passes', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ norad_id: norad, lat:0, lon:0, hours_ahead:0.01 }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.error || 'Lookup failed', 'error'); return; }
+    res_el.innerHTML = `
+      <div class="ql-card">
+        <div class="ql-field"><span>NORAD ID</span><strong>${data.norad_id}</strong></div>
+        <div class="ql-field"><span>Name</span><strong>${data.satellite_name}</strong></div>
+        <div class="ql-actions">
+          <a href="/passes?norad=${data.norad_id}" class="ql-link">Predict Passes →</a>
+          <a href="/catalog" class="ql-link">Browse Catalog →</a>
+        </div>
+      </div>`;
+    res_el.classList.remove('hidden');
+  } catch(e) { showToast('Network error: ' + e.message, 'error'); }
+  finally { btn.disabled = false; spin.classList.add('hidden'); }
+}
+
+// Press Enter for lookup
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('qlNorad').addEventListener('keydown', e => {
+    if (e.key === 'Enter') quickLookup();
+  });
+});
+</script>
+{% endblock %}

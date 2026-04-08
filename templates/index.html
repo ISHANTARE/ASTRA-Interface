@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="ASTRA Mission Control — Live Space Situational Awareness powered by the ASTRA-Core physics engine and Space-Track.org data." />
+  <title>ASTRA · Mission Control</title>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- ════════ STAR FIELD CANVAS ════════ -->
+  <canvas id="starfield"></canvas>
+
+  <!-- ════════ TOP NAV ════════ -->
+  <header class="topbar">
+    <div class="topbar-brand">
+      <svg class="brand-icon" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="16" cy="16" r="14" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 2"/>
+        <circle cx="16" cy="16" r="5" fill="currentColor"/>
+        <ellipse cx="16" cy="16" rx="14" ry="5.5" stroke="currentColor" stroke-width="1.2" transform="rotate(-30 16 16)"/>
+      </svg>
+      <span class="brand-name">ASTRA</span>
+      <span class="brand-sub">Mission Control</span>
+    </div>
+
+    <div class="topbar-status" id="statusBar">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">Connecting…</span>
+      <span class="version-badge" id="versionBadge">—</span>
+    </div>
+
+    <nav class="topbar-nav">
+      <button class="nav-btn active" data-tab="catalog" id="navCatalog">
+        <svg viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="11" y="3" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="11" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="11" y="11" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>
+        Catalog
+      </button>
+      <button class="nav-btn" data-tab="conjunctions" id="navConjunctions">
+        <svg viewBox="0 0 20 20" fill="none"><circle cx="6" cy="10" r="4" stroke="currentColor" stroke-width="1.5"/><circle cx="14" cy="10" r="4" stroke="currentColor" stroke-width="1.5"/></svg>
+        Conjunctions
+      </button>
+      <button class="nav-btn" data-tab="passes" id="navPasses">
+        <svg viewBox="0 0 20 20" fill="none"><path d="M10 3 L10 17 M3 10 L17 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="10" cy="10" r="3" stroke="currentColor" stroke-width="1.5"/></svg>
+        Pass Predictor
+      </button>
+    </nav>
+  </header>
+
+  <!-- ════════ MAIN CONTENT ════════ -->
+  <main class="main">
+
+    <!-- ── TAB: CATALOG ── -->
+    <section class="tab-panel active" id="tabCatalog">
+      <div class="panel-header">
+        <h1 class="panel-title">Satellite Catalog Browser</h1>
+        <p class="panel-sub">Fetch live data from Space-Track.org and explore the orbital catalog. Uses authenticated ASTRA-Core pipeline.</p>
+      </div>
+
+      <div class="control-card">
+        <div class="control-grid">
+          <div class="form-group">
+            <label for="catalogGroup">Satellite Group</label>
+            <select id="catalogGroup">
+              <option value="starlink">Starlink</option>
+              <option value="gps-ops">GPS Constellation</option>
+              <option value="iridium-33-debris">Iridium-33 Debris</option>
+              <option value="cosmos-2251-debris">Cosmos-2251 Debris</option>
+              <option value="active">All Active Satellites</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="catalogFormat">Data Format</label>
+            <select id="catalogFormat">
+              <option value="json">OMM (recommended)</option>
+              <option value="tle">TLE (legacy)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="catalogLimit">Display Limit</label>
+            <input type="number" id="catalogLimit" value="200" min="10" max="500" />
+          </div>
+          <div class="form-group form-group--action">
+            <button class="btn-primary" id="btnFetchCatalog">
+              <span class="btn-icon">↓</span> Fetch Catalog
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="catalogMeta" class="result-meta hidden"></div>
+      <div id="catalogLoader" class="loader-container hidden">
+        <div class="orbit-loader"></div>
+        <p>Authenticating with Space-Track.org and fetching data…</p>
+      </div>
+      <div id="catalogError" class="error-card hidden"></div>
+
+      <div class="table-wrapper" id="catalogTableWrapper">
+        <table class="data-table" id="catalogTable">
+          <thead>
+            <tr>
+              <th>NORAD ID</th>
+              <th>Name</th>
+              <th>Type</th>
+              <th>Format</th>
+              <th>Epoch (UTC)</th>
+              <th>Inclination (°)</th>
+              <th>Eccentricity</th>
+              <th>Rev/Day</th>
+              <th>RCS (m²)</th>
+              <th>Mass (kg)</th>
+            </tr>
+          </thead>
+          <tbody id="catalogTbody">
+            <tr class="empty-row"><td colspan="10">Fetch a catalog group to view data.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── TAB: CONJUNCTIONS ── -->
+    <section class="tab-panel" id="tabConjunctions">
+      <div class="panel-header">
+        <h1 class="panel-title">Conjunction Screener</h1>
+        <p class="panel-sub">Propagates satellite trajectories using SGP4 and applies KD-tree + cubic-spline conjunction detection from ASTRA-Core.</p>
+      </div>
+
+      <div class="control-card">
+        <div class="control-grid">
+          <div class="form-group">
+            <label for="conjGroup">Satellite Group</label>
+            <select id="conjGroup">
+              <option value="starlink">Starlink</option>
+              <option value="iridium-33-debris">Iridium-33 Debris</option>
+              <option value="cosmos-2251-debris">Cosmos-2251 Debris</option>
+              <option value="gps-ops">GPS Constellation</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="conjLimit">Satellites to Screen</label>
+            <input type="number" id="conjLimit" value="60" min="10" max="200" />
+          </div>
+          <div class="form-group">
+            <label for="conjThreshold">Threshold Distance (km)</label>
+            <input type="number" id="conjThreshold" value="10" min="1" max="100" step="0.5" />
+          </div>
+          <div class="form-group">
+            <label for="conjDuration">Propagation Window (min)</label>
+            <input type="number" id="conjDuration" value="120" min="30" max="1440" step="30" />
+          </div>
+          <div class="form-group form-group--action">
+            <button class="btn-primary btn-warning" id="btnRunConjunctions">
+              <span class="btn-icon">⚡</span> Screen Conjunctions
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="conjMeta" class="result-meta hidden"></div>
+      <div id="conjLoader" class="loader-container hidden">
+        <div class="orbit-loader"></div>
+        <p>Fetching catalog → propagating orbits → screening conjunctions…</p>
+      </div>
+      <div id="conjError" class="error-card hidden"></div>
+
+      <div class="table-wrapper" id="conjTableWrapper">
+        <table class="data-table" id="conjTable">
+          <thead>
+            <tr>
+              <th>Object A</th>
+              <th>Object B</th>
+              <th>TCA (UTC)</th>
+              <th>Miss Distance (km)</th>
+              <th>Rel. Velocity (km/s)</th>
+              <th>Collision P<sub>c</sub></th>
+              <th>Risk Level</th>
+              <th>Cov. Source</th>
+            </tr>
+          </thead>
+          <tbody id="conjTbody">
+            <tr class="empty-row"><td colspan="8">Run conjunction screening to view events.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ── TAB: PASS PREDICTOR ── -->
+    <section class="tab-panel" id="tabPasses">
+      <div class="panel-header">
+        <h1 class="panel-title">Ground Pass Predictor</h1>
+        <p class="panel-sub">Predict when a satellite will pass over your ground station using ASTRA-Core's vectorized TEME → ENU pipeline with sub-second AOS/LOS refinement.</p>
+      </div>
+
+      <div class="control-card">
+        <div class="control-grid control-grid--passes">
+          <div class="form-group">
+            <label for="passNorad">NORAD ID</label>
+            <input type="text" id="passNorad" value="25544" placeholder="e.g. 25544 (ISS)" />
+          </div>
+          <div class="form-group">
+            <label for="passObsName">Observer Name</label>
+            <input type="text" id="passObsName" value="My Ground Station" />
+          </div>
+          <div class="form-group">
+            <label for="passLat">Latitude (°)</label>
+            <input type="number" id="passLat" value="12.9716" step="0.001" min="-90" max="90" />
+          </div>
+          <div class="form-group">
+            <label for="passLon">Longitude (°)</label>
+            <input type="number" id="passLon" value="77.5946" step="0.001" min="-180" max="180" />
+          </div>
+          <div class="form-group">
+            <label for="passElev">Elevation (m)</label>
+            <input type="number" id="passElev" value="920" min="0" max="8849" />
+          </div>
+          <div class="form-group">
+            <label for="passMinElev">Min. Elevation (°)</label>
+            <input type="number" id="passMinElev" value="10" min="0" max="90" />
+          </div>
+          <div class="form-group">
+            <label for="passHours">Hours Ahead</label>
+            <input type="number" id="passHours" value="24" min="4" max="72" />
+          </div>
+          <div class="form-group form-group--action">
+            <button class="btn-primary btn-green" id="btnRunPasses">
+              <span class="btn-icon">◉</span> Predict Passes
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="passMeta" class="result-meta hidden"></div>
+      <div id="passLoader" class="loader-container hidden">
+        <div class="orbit-loader"></div>
+        <p>Fetching satellite data and computing pass windows…</p>
+      </div>
+      <div id="passError" class="error-card hidden"></div>
+
+      <div class="table-wrapper" id="passTableWrapper">
+        <table class="data-table" id="passTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>NORAD ID</th>
+              <th>AOS (UTC)</th>
+              <th>TCA (UTC)</th>
+              <th>LOS (UTC)</th>
+              <th>Max Elevation (°)</th>
+              <th>Az at AOS (°)</th>
+              <th>Az at LOS (°)</th>
+              <th>Duration (s)</th>
+            </tr>
+          </thead>
+          <tbody id="passTbody">
+            <tr class="empty-row"><td colspan="9">Enter a NORAD ID and observer location to predict passes.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ════════ FOOTER ════════ -->
+  <footer class="footer">
+    <span>ASTRA-Core Engine &copy; 2026 Ishan Tare · MIT License</span>
+    <span class="footer-sep">·</span>
+    <span>Data: Space-Track.org (18th Space Defense Squadron)</span>
+    <span class="footer-sep">·</span>
+    <a href="https://astra-core.readthedocs.io" target="_blank" rel="noopener">Documentation</a>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

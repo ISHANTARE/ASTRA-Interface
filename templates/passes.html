@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}Pass Predictor{% endblock %}
+{% block breadcrumb %}Ground Pass Predictor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1 class="page-title">Ground Pass Predictor</h1>
+    <p class="page-sub">Predict when a satellite will be visible above your ground station's horizon. Uses ASTRA-Core's vectorized TEME → ENU pipeline with iterative binary-search AOS/LOS refinement.</p>
+  </div>
+</div>
+
+<div class="control-card">
+  <div class="control-grid control-grid--wide">
+    <div class="form-group">
+      <label for="passNorad">NORAD ID</label>
+      <input type="text" id="passNorad" value="25544" placeholder="e.g. 25544 (ISS)"/>
+    </div>
+    <div class="form-group">
+      <label for="passObsName">Observer Name</label>
+      <input type="text" id="passObsName" value="My Ground Station"/>
+    </div>
+    <div class="form-group">
+      <label for="passLat">Latitude (°)</label>
+      <input type="number" id="passLat" value="12.9716" step="0.0001" min="-90" max="90"/>
+    </div>
+    <div class="form-group">
+      <label for="passLon">Longitude (°)</label>
+      <input type="number" id="passLon" value="77.5946" step="0.0001" min="-180" max="180"/>
+    </div>
+    <div class="form-group">
+      <label for="passElev">Elevation (m)</label>
+      <input type="number" id="passElev" value="920" min="0" max="8849"/>
+    </div>
+    <div class="form-group">
+      <label for="passMinElev">Min. Elevation (°)</label>
+      <input type="number" id="passMinElev" value="10" min="0" max="90"/>
+    </div>
+    <div class="form-group">
+      <label for="passHours">Hours Ahead</label>
+      <input type="number" id="passHours" value="24" min="4" max="72"/>
+    </div>
+    <div class="form-group form-group--action">
+      <button class="btn-primary btn-green" id="btnRunPasses">
+        <span class="btn-spinner hidden" id="passSpinner"></span>
+        ◉ Predict Passes
+      </button>
+    </div>
+  </div>
+
+  <!-- Preset quick-select -->
+  <div class="preset-bar">
+    <span class="preset-label">Quick presets:</span>
+    <button class="preset-btn" onclick="setPreset(12.9716,77.5946,920,'Bengaluru, India')">🇮🇳 Bengaluru</button>
+    <button class="preset-btn" onclick="setPreset(28.6139,77.2090,216,'New Delhi, India')">🇮🇳 New Delhi</button>
+    <button class="preset-btn" onclick="setPreset(51.5074,-0.1278,11,'London, UK')">🇬🇧 London</button>
+    <button class="preset-btn" onclick="setPreset(40.7128,-74.0060,10,'New York, USA')">🇺🇸 New York</button>
+    <button class="preset-btn" onclick="setPreset(35.6762,139.6503,40,'Tokyo, Japan')">🇯🇵 Tokyo</button>
+  </div>
+</div>
+
+<div id="passMeta"   class="result-meta hidden"></div>
+<div id="passLoader" class="loader-container hidden">
+  <div class="orbit-loader"></div>
+  <p>Fetching satellite elements → computing pass windows over the ground track…</p>
+</div>
+<div id="passError"  class="error-card hidden"></div>
+
+<!-- Timeline view of passes -->
+<div id="passTimeline" class="pass-timeline hidden"></div>
+
+<div class="table-wrapper">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>AOS (UTC)</th>
+        <th>TCA (UTC)</th>
+        <th>LOS (UTC)</th>
+        <th>Max Elevation</th>
+        <th>Az at AOS (°)</th>
+        <th>Az at LOS (°)</th>
+        <th>Duration</th>
+      </tr>
+    </thead>
+    <tbody id="passTbody">
+      <tr class="empty-row"><td colspan="8">Enter a NORAD ID and observer location to predict passes.</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const btnPass  = document.getElementById('btnRunPasses');
+const spinner  = document.getElementById('passSpinner');
+const loader   = document.getElementById('passLoader');
+const errorEl  = document.getElementById('passError');
+const metaEl   = document.getElementById('passMeta');
+const tbody    = document.getElementById('passTbody');
+const timeline = document.getElementById('passTimeline');
+
+// Pre-fill from URL param
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.has('norad')) document.getElementById('passNorad').value = urlParams.get('norad');
+
+function setPreset(lat, lon, elev, name) {
+  document.getElementById('passLat').value  = lat;
+  document.getElementById('passLon').value  = lon;
+  document.getElementById('passElev').value = elev;
+  document.getElementById('passObsName').value = name;
+  showToast(`Preset: ${name}`, 'info');
+}
+
+btnPass.addEventListener('click', runPasses);
+document.getElementById('passNorad').addEventListener('keydown', e => { if(e.key==='Enter') runPasses(); });
+
+async function runPasses() {
+  const norad     = document.getElementById('passNorad').value.trim();
+  const obsName   = document.getElementById('passObsName').value.trim();
+  const lat       = parseFloat(document.getElementById('passLat').value);
+  const lon       = parseFloat(document.getElementById('passLon').value);
+  const elev_m    = parseFloat(document.getElementById('passElev').value);
+  const min_elev  = parseFloat(document.getElementById('passMinElev').value);
+  const hours     = parseFloat(document.getElementById('passHours').value);
+
+  if (!norad) { showError(errorEl, 'Please enter a NORAD ID.'); return; }
+
+  hide(errorEl); hide(metaEl); hide(timeline);
+  show(loader); btnPass.disabled = true; spinner.classList.remove('hidden');
+  tbody.innerHTML = '<tr class="empty-row"><td colspan="8">Computing…</td></tr>';
+
+  try {
+    const res  = await fetch('/api/passes', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ norad_id: norad, observer_name: obsName, lat, lon,
+                             elevation_m: elev_m, min_elevation_deg: min_elev, hours_ahead: hours }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showError(errorEl, data.error || 'Server error'); return; }
+
+    metaEl.innerHTML = chip('Satellite', data.satellite_name || data.norad_id) +
+      ' · ' + chip('NORAD', data.norad_id) +
+      ' · ' + chip('Observer', data.observer) +
+      ' · ' + chip('Window', `${data.hours_ahead}h`) +
+      ' · ' + chip('Passes', data.passes_found);
+    show(metaEl);
+
+    // Timeline
+    if (data.passes.length) {
+      renderTimeline(data.passes);
+      show(timeline);
+    }
+
+    if (!data.passes.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No visible passes in the prediction window. Try increasing hours ahead or lowering minimum elevation.</td></tr>';
+      showToast('No passes found. Try extending the window.', 'info');
+      return;
+    }
+
+    tbody.innerHTML = data.passes.map((p, i) => `
+      <tr>
+        <td style="color:var(--text-muted)">${i+1}</td>
+        <td>${fmtDate(p.aos)}</td>
+        <td>${fmtDate(p.tca)}</td>
+        <td>${fmtDate(p.los)}</td>
+        <td>${elevBar(p.max_elevation_deg)}</td>
+        <td>${fmtNum(p.azimuth_at_aos_deg,1)}°</td>
+        <td>${fmtNum(p.azimuth_at_los_deg,1)}°</td>
+        <td><strong>${fmtDuration(p.duration_seconds)}</strong></td>
+      </tr>`).join('');
+
+    showToast(`Found ${data.passes_found} pass${data.passes_found!==1?'es':''} for ${data.satellite_name}.`, 'success');
+  } catch(e) { showError(errorEl, 'Network error: ' + e.message); }
+  finally { hide(loader); btnPass.disabled = false; spinner.classList.add('hidden'); }
+}
+
+function renderTimeline(passes) {
+  if (!passes.length) return;
+  const now = Date.now();
+  const total_ms = parseFloat(document.getElementById('passHours').value) * 3600000;
+  const start_ms = new Date(passes[0].aos.replace('Z','+00:00')).getTime();
+  const tl_start = Math.min(now, start_ms - 600000);
+  const tl_end   = tl_start + total_ms;
+  const tl_range = tl_end - tl_start;
+
+  timeline.innerHTML = `<div class="tl-label">Pass Timeline (next ${document.getElementById('passHours').value}h)</div>
+    <div class="tl-track">` +
+    passes.map((p, i) => {
+      const aos = new Date(p.aos.replace('Z','+00:00')).getTime();
+      const los = new Date(p.los.replace('Z','+00:00')).getTime();
+      const left  = ((aos - tl_start) / tl_range * 100).toFixed(2);
+      const width = ((los - aos) / tl_range * 100).toFixed(2);
+      const maxEl = p.max_elevation_deg;
+      const opacity = 0.4 + (maxEl / 90 * 0.6);
+      return `<div class="tl-pass" style="left:${left}%;width:${width}%;opacity:${opacity}" title="Pass ${i+1}: AOS ${p.aos.slice(11,19)} | Max El ${maxEl}° | ${p.duration_seconds}s">
+        <span class="tl-pass-label">${i+1}</span></div>`;
+    }).join('') + `<div class="tl-now" style="left:${((now-tl_start)/tl_range*100).toFixed(2)}%"></div>
+    </div>`;
+}
+
+function fmtDuration(s) {
+  const m = Math.floor(s / 60);
+  const sec = Math.round(s % 60);
+  return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+}
+</script>
+{% endblock %}

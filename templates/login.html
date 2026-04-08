@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <meta name="description" content="ASTRA Mission Control — Sign in to access live space situational awareness."/>
+  <title>ASTRA · Sign In</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body class="auth-body">
+
+  <canvas id="starfield"></canvas>
+
+  <div class="auth-shell">
+
+    <!-- ── LEFT PANEL ───────────────────────────────── -->
+    <div class="auth-left">
+      <div class="auth-left-inner">
+        <div class="auth-brand">
+          <svg class="auth-brand-icon" viewBox="0 0 48 48" fill="none">
+            <circle cx="24" cy="24" r="21" stroke="currentColor" stroke-width="1.5" stroke-dasharray="5 3"/>
+            <circle cx="24" cy="24" r="7" fill="currentColor"/>
+            <ellipse cx="24" cy="24" rx="21" ry="8" stroke="currentColor" stroke-width="1.2" transform="rotate(-35 24 24)"/>
+            <ellipse cx="24" cy="24" rx="21" ry="8" stroke="currentColor" stroke-width="1.2" opacity="0.4" transform="rotate(35 24 24)"/>
+          </svg>
+          <div>
+            <div class="auth-brand-name">ASTRA</div>
+            <div class="auth-brand-tagline">Autonomous Space Traffic Risk Analyzer</div>
+          </div>
+        </div>
+
+        <div class="auth-hero">
+          <h1 class="auth-hero-title">Mission Control<br/>at your fingertips.</h1>
+          <p class="auth-hero-desc">
+            Real-time orbital catalog browser, conjunction risk screening, and
+            ground pass prediction — powered by the ASTRA-Core physics engine
+            and live Space-Track.org data.
+          </p>
+        </div>
+
+        <div class="auth-features">
+          <div class="auth-feat">
+            <span class="feat-icon">🛰️</span>
+            <span>Live satellite catalog from Space-Track.org</span>
+          </div>
+          <div class="auth-feat">
+            <span class="feat-icon">⚡</span>
+            <span>KD-tree + cubic-spline conjunction screening</span>
+          </div>
+          <div class="auth-feat">
+            <span class="feat-icon">📡</span>
+            <span>Sub-second AOS/LOS ground-pass prediction</span>
+          </div>
+          <div class="auth-feat">
+            <span class="feat-icon">🔒</span>
+            <span>Per-user encrypted Space-Track credentials</span>
+          </div>
+        </div>
+
+        <div class="auth-version">
+          ASTRA-Core v{{ astra_version }} &nbsp;·&nbsp; MIT License
+        </div>
+      </div>
+    </div>
+
+    <!-- ── RIGHT PANEL (form) ───────────────────────── -->
+    <div class="auth-right">
+      <div class="auth-card">
+
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, msg in messages %}
+              <div class="flash flash-{{ category }}">{{ msg }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
+        <!-- Tabs -->
+        <div class="auth-tabs">
+          <button class="auth-tab active" id="tabLogin" onclick="showTab('login')">Sign In</button>
+          <button class="auth-tab" id="tabRegister" onclick="showTab('register')">Create Account</button>
+        </div>
+
+        <!-- LOGIN FORM -->
+        <form id="formLogin" class="auth-form" method="POST" action="/login">
+          <input type="hidden" name="action" value="login"/>
+
+          <div class="field-group">
+            <label for="loginUser">Username</label>
+            <input id="loginUser" name="username" type="text" placeholder="your_username" autocomplete="username" required/>
+          </div>
+          <div class="field-group">
+            <label for="loginPass">Password</label>
+            <div class="field-pw-wrap">
+              <input id="loginPass" name="password" type="password" placeholder="••••••••" autocomplete="current-password" required/>
+              <button type="button" class="pw-toggle" onclick="togglePw('loginPass', this)">👁</button>
+            </div>
+          </div>
+
+          <button type="submit" class="auth-submit-btn" id="loginBtn">
+            <span class="btn-spinner hidden" id="loginSpinner"></span>
+            Sign In to Mission Control
+          </button>
+          <p class="auth-switch">Don't have an account? <a href="#" onclick="showTab('register')">Create one</a></p>
+        </form>
+
+        <!-- REGISTER FORM -->
+        <form id="formRegister" class="auth-form hidden" method="POST" action="/login">
+          <input type="hidden" name="action" value="register"/>
+
+          <div class="field-group">
+            <label for="regUser">Username</label>
+            <input id="regUser" name="username" type="text" placeholder="mission_operator" required/>
+          </div>
+          <div class="field-group">
+            <label for="regEmail">Email</label>
+            <input id="regEmail" name="email" type="email" placeholder="operator@agency.space" required/>
+          </div>
+          <div class="field-group">
+            <label for="regPass">Password</label>
+            <div class="field-pw-wrap">
+              <input id="regPass" name="password" type="password" placeholder="Min 6 characters" required/>
+              <button type="button" class="pw-toggle" onclick="togglePw('regPass', this)">👁</button>
+            </div>
+          </div>
+          <div class="field-group">
+            <label for="regConfirm">Confirm Password</label>
+            <input id="regConfirm" name="confirm" type="password" placeholder="Repeat password" required/>
+          </div>
+
+          <button type="submit" class="auth-submit-btn auth-submit-green">
+            Create Account &amp; Launch
+          </button>
+          <p class="auth-switch">Already have an account? <a href="#" onclick="showTab('login')">Sign in</a></p>
+        </form>
+
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+  <script>
+    // Pre-select register tab if there were register errors
+    {% if request.form.get('action') == 'register' %}
+    document.addEventListener('DOMContentLoaded', () => showTab('register'));
+    {% endif %}
+  </script>
+</body>
+</html>
