@@ -32,6 +32,7 @@ from astra.omm import parse_omm_json
 
 import crypto
 import database as db
+import storage
 
 # ── App Setup ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -123,12 +124,13 @@ def inject_globals():
     if "user_id" in session:
         row = db.get_user_by_id(session["user_id"])
         if row:
-            user = dict(row)
+            user = row
         has_creds = _has_st_creds()
     return dict(
         current_user=user,
         has_st_creds=has_creds,
         astra_version=astra.__version__,
+        s3_static_prefix=storage.get_static_prefix(),
     )
 
 
@@ -534,13 +536,24 @@ def api_passes():
     })
 
 
+@app.route("/api/health")
+def health_check():
+    """Load balancer health check endpoint for AWS EC2/ALB."""
+    try:
+        # Check DB connection
+        db.get_user_by_id(0) # dummy query
+        return jsonify({"status": "healthy", "s3_configured": bool(storage.AWS_S3_BUCKET)}), 200
+    except Exception as e:
+        return jsonify({"status": "unhealthy", "error": str(e)}), 503
+
 # ════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("=" * 60)
     print("  ASTRA-Interface  —  Mission Control Platform")
     print("=" * 60)
     print(f"  ASTRA-Core v{astra.__version__}")
-    print(f"  DB: {db.DB_PATH}")
+    db_print = db.DATABASE_URL.split("@")[-1] if "@" in db.DATABASE_URL else db.DATABASE_URL
+    print(f"  DB: {db_print}")
     print(f"  → Open http://127.0.0.1:5000")
     print("=" * 60)
     app.run(debug=True, port=5000)

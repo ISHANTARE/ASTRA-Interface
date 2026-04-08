@@ -1,6 +1,6 @@
 """
 ASTRA-Interface Platform — database.py
-SQLite schema + CRUD helpers.
+SQLAlchemy schema + CRUD helpers matching AWS RDS configurations.
 
 Credential storage security model:
   - Platform passwords  → bcrypt hash via werkzeug  (one-way, in users table)
@@ -8,157 +8,151 @@ Credential storage security model:
 """
 from __future__ import annotations
 
+import os
 import logging
-import sqlite3
+import datetime
+from pathlib import Path
+
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy.orm import sessionmaker, declarative_base
 
 import crypto as _crypto
 
 logger = logging.getLogger(__name__)
-from pathlib import Path
 
+# Fallback to local SQLite if DATABASE_URL is not set
 DB_PATH = Path(__file__).parent / "astra_platform.db"
+DEFAULT_DATABASE_URL = f"sqlite:///{DB_PATH}"
 
+DATABASE_URL = os.environ.get("DATABASE_URL", DEFAULT_DATABASE_URL)
 
-def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+# Configure Engine
+connect_args = {}
+if DATABASE_URL.startswith("sqlite"):
+    connect_args["check_same_thread"] = False
+
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# ── Models ───────────────────────────────────────────────────────────────────
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, nullable=False)
+    email = Column(String(120), unique=True, nullable=False)
+    password = Column(String(200), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id, 
+            "username": self.username, 
+            "email": self.email, 
+            "password": self.password, 
+            "created_at": self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else None
+        }
+
+class SpaceTrackCredential(Base):
+    __tablename__ = "spacetrack_credentials"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    st_username = Column(String(100), nullable=False)
+    st_password = Column(String(200), nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+class ActivityLog(Base):
+    __tablename__ = "activity_log"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    action = Column(String(50), nullable=False)
+    detail = Column(String(255))
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
 def init_db() -> None:
-    with get_db() as conn:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            username    TEXT    NOT NULL UNIQUE,
-            email       TEXT    NOT NULL UNIQUE,
-            password    TEXT    NOT NULL,
-            created_at  TEXT    DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS spacetrack_credentials (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id     INTEGER NOT NULL UNIQUE,
-            st_username TEXT    NOT NULL,
-            st_password TEXT    NOT NULL,
-            updated_at  TEXT    DEFAULT (datetime('now')),
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS activity_log (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id     INTEGER NOT NULL,
-            action      TEXT    NOT NULL,
-            detail      TEXT,
-            created_at  TEXT    DEFAULT (datetime('now')),
-            FOREIGN KEY (user_id) REFERENCES users(id)
-        );
-        """)
-
+    Base.metadata.create_all(bind=engine)
 
 # ── Users ────────────────────────────────────────────────────────────────────
 
 def create_user(username: str, email: str, password_hash: str) -> int:
-    with get_db() as conn:
-        cur = conn.execute(
-            "INSERT INTO users (username, email, password) VALUES (?, ?, ?)",
-            (username, email, password_hash),
-        )
-        return cur.lastrowid
+    with SessionLocal() as db:
+        user = User(username=username, email=email, password=password_hash)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        return user.id
 
+def get_user_by_username(username: str) -> dict | None:
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.username == username).first()
+        return user.to_dict() if user else None
 
-def get_user_by_username(username: str) -> sqlite3.Row | None:
-    with get_db() as conn:
-        return conn.execute(
-            "SELECT * FROM users WHERE username = ?", (username,)
-        ).fetchone()
-
-
-def get_user_by_id(user_id: int) -> sqlite3.Row | None:
-    with get_db() as conn:
-        return conn.execute(
-            "SELECT * FROM users WHERE id = ?", (user_id,)
-        ).fetchone()
-
+def get_user_by_id(user_id: int) -> dict | None:
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.id == user_id).first()
+        return user.to_dict() if user else None
 
 # ── Space-Track Credentials ───────────────────────────────────────────────────
 
 def save_spacetrack_creds(user_id: int, st_user: str, st_pass: str) -> None:
-    """Persist ST credentials — password is Fernet-encrypted before storage."""
     encrypted_pass = _crypto.encrypt(st_pass)
-    with get_db() as conn:
-        conn.execute("""
-            INSERT INTO spacetrack_credentials (user_id, st_username, st_password, updated_at)
-            VALUES (?, ?, ?, datetime('now'))
-            ON CONFLICT(user_id) DO UPDATE SET
-                st_username = excluded.st_username,
-                st_password = excluded.st_password,
-                updated_at  = excluded.updated_at
-        """, (user_id, st_user, encrypted_pass))
-
+    with SessionLocal() as db:
+        cred = db.query(SpaceTrackCredential).filter(SpaceTrackCredential.user_id == user_id).first()
+        if cred:
+            cred.st_username = st_user
+            cred.st_password = encrypted_pass
+            cred.updated_at = datetime.datetime.utcnow()
+        else:
+            cred = SpaceTrackCredential(user_id=user_id, st_username=st_user, st_password=encrypted_pass)
+            db.add(cred)
+        db.commit()
 
 def get_spacetrack_creds(user_id: int) -> dict | None:
-    """Return ST credentials with the password already decrypted.
-
-    Handles legacy rows that were stored in plaintext before encryption was
-    introduced — detected via ``crypto.is_encrypted()``; those rows are returned
-    as-is and will be re-encrypted the next time the user saves their credentials.
-    """
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT * FROM spacetrack_credentials WHERE user_id = ?", (user_id,)
-        ).fetchone()
-
-    if row is None:
-        return None
-
-    st_pass_stored = row["st_password"]
-    if _crypto.is_encrypted(st_pass_stored):
-        try:
-            st_pass_plain = _crypto.decrypt(st_pass_stored)
-        except ValueError:
-            # Key changed — treat as missing so user re-enters creds.
-            logger.warning("ST credential decryption failed for user %s (key rotation?)", user_id)
+    with SessionLocal() as db:
+        cred = db.query(SpaceTrackCredential).filter(SpaceTrackCredential.user_id == user_id).first()
+        if not cred:
             return None
-    else:
-        # Legacy plaintext row — return as-is; will be re-encrypted on next save.
-        logger.info("Legacy plaintext ST credential detected for user %s", user_id)
-        st_pass_plain = st_pass_stored
 
-    return {
-        "st_username": row["st_username"],
-        "st_password": st_pass_plain,
-        "updated_at":  row["updated_at"],
-    }
+        st_pass_stored = cred.st_password
+        if _crypto.is_encrypted(st_pass_stored):
+            try:
+                st_pass_plain = _crypto.decrypt(st_pass_stored)
+            except ValueError:
+                logger.warning("ST credential decryption failed for user %s", user_id)
+                return None
+        else:
+            logger.info("Legacy plaintext ST credential detected for user %s", user_id)
+            st_pass_plain = st_pass_stored
 
+        return {
+            "st_username": cred.st_username,
+            "st_password": st_pass_plain,
+            "updated_at":  cred.updated_at.isoformat() if cred.updated_at else None,
+        }
 
 def _get_raw_st_password(user_id: int) -> str | None:
-    """Return the raw stored password value (ciphertext or legacy plaintext).
-    Used internally by app.py for the opportunistic re-encryption check.
-    """
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT st_password FROM spacetrack_credentials WHERE user_id = ?", (user_id,)
-        ).fetchone()
-    return row["st_password"] if row else None
-
+    with SessionLocal() as db:
+        cred = db.query(SpaceTrackCredential).filter(SpaceTrackCredential.user_id == user_id).first()
+        return cred.st_password if cred else None
 
 # ── Activity Log ─────────────────────────────────────────────────────────────
 
 def log_activity(user_id: int, action: str, detail: str = "") -> None:
-    with get_db() as conn:
-        conn.execute(
-            "INSERT INTO activity_log (user_id, action, detail) VALUES (?, ?, ?)",
-            (user_id, action, detail),
-        )
+    with SessionLocal() as db:
+        log = ActivityLog(user_id=user_id, action=action, detail=detail)
+        db.add(log)
+        db.commit()
 
-
-def get_recent_activity(user_id: int, limit: int = 10) -> list[sqlite3.Row]:
-    with get_db() as conn:
-        return conn.execute("""
-            SELECT action, detail, created_at
-            FROM activity_log
-            WHERE user_id = ?
-            ORDER BY id DESC
-            LIMIT ?
-        """, (user_id, limit)).fetchall()
+def get_recent_activity(user_id: int, limit: int = 10) -> list[dict]:
+    with SessionLocal() as db:
+        logs = db.query(ActivityLog).filter(ActivityLog.user_id == user_id).order_by(ActivityLog.id.desc()).limit(limit).all()
+        return [
+            {
+                "id": log.id,
+                "action": log.action,
+                "detail": log.detail,
+                "created_at": log.created_at.strftime("%Y-%m-%d %H:%M:%S") if log.created_at else None
+            } 
+            for log in logs
+        ]
