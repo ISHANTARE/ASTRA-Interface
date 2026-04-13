@@ -272,34 +272,58 @@ def api_status():
     })
 
 
+_STATS_CACHE = {"data": None, "timestamp": 0}
+
 @app.route("/api/dashboard-stats")
 @login_required
 def dashboard_stats():
     """Return quick stats for the dashboard cards."""
     if not _inject_st_creds():
         return jsonify({"error": "no_credentials"}), 400
+
+    import time
+    now = time.time()
+    
+    # Use cached data if less than 2 hours old to prevent hitting Space-Track rate limits on every reload
+    if _STATS_CACHE["data"] and (now - _STATS_CACHE["timestamp"]) < 7200:
+        return jsonify(_STATS_CACHE["data"])
+
     try:
-        # Fetch a small ISS record to validate connection
-        from astra.spacetrack import _create_session
-        username, password = _get_credentials()
-        sess = _create_session(username, password)
-        url = f"{_ST_QUERY_URL}/DECAY_DATE/null-val/EPOCH/>now-30/FORMAT/json/orderby/EPOCH desc/limit/1"
-        r = sess.get(url, timeout=20.0)
-        r.raise_for_status()
-        import json as _json
-        data = _json.loads(r.text)
-        total_approx = 10857  # authoritative estimate from ST catalog
-        return jsonify({
-            "tracked_objects": total_approx,
-            "leo_objects": 7240,
-            "meo_objects": 580,
-            "geo_objects": 1302,
-            "heo_objects": 735,
+        from astra.spacetrack import fetch_spacetrack_active
+        satellites = fetch_spacetrack_active(format="json")
+        
+        regime_counts = {"LEO": 0, "MEO": 0, "GEO": 0, "HEO": 0}
+        
+        for sat in satellites:
+            alt_km = 0
+            if hasattr(sat, "mean_motion_rad_min") and sat.mean_motion_rad_min > 0:
+                n_rads = sat.mean_motion_rad_min / 60.0
+                a_km = (398600.4418 / (n_rads**2)) ** (1/3)
+                alt_km = a_km - 6371.0
+            
+            regime = _orbit_regime(max(0, alt_km))
+            regime_counts[regime] = regime_counts.get(regime, 0) + 1
+
+        latest_epoch = _jd_to_iso(satellites[0].epoch_jd) if satellites else "—"
+
+        data = {
+            "tracked_objects": len(satellites),
+            "leo_objects": regime_counts["LEO"],
+            "meo_objects": regime_counts["MEO"],
+            "geo_objects": regime_counts["GEO"],
+            "heo_objects": regime_counts["HEO"],
             "data_fresh": True,
-            "latest_epoch": data[0].get("EPOCH", "—") if data else "—",
-        })
+            "latest_epoch": latest_epoch,
+        }
+        
+        _STATS_CACHE["data"] = data
+        _STATS_CACHE["timestamp"] = now
+        return jsonify(data)
     except Exception as exc:
         traceback.print_exc()
+        # If cache exists but fetch fails, return cached data as fallback
+        if _STATS_CACHE["data"]:
+            return jsonify(_STATS_CACHE["data"])
         return jsonify({"error": str(exc)}), 500
 
 
